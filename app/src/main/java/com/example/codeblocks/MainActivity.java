@@ -1,47 +1,77 @@
 package com.example.codeblocks;
 
+import android.content.ClipData;
 import android.content.Context;
 import android.graphics.Color;
+import android.graphics.Rect;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.text.Editable;
+import android.text.TextWatcher;
+import android.view.DragEvent;
+import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.ViewGroup;
-import android.widget.Button;
+import android.view.WindowManager;
+import android.widget.EditText;
 import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
 import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
 import androidx.activity.OnBackPressedCallback;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
+import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsCompat;
+import androidx.core.view.WindowInsetsControllerCompat;
 
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 
 public class MainActivity extends AppCompatActivity {
 
     /* ============================================================
-       1. BLOCKS (the program the child builds)
+       1. BLOCKS
        ============================================================ */
 
-    static final String NONE = "(nothing)";
-    static final int INPUT = 0, PRINT = 1, IF = 2, FOR = 3;
-    static final String[] KIND_LABELS = {"📥 Get input", "💬 Print", "❓ If / Otherwise", "🔁 For loop"};
+    static final String NONE = "(no variable)";
+    static final int ASK = 0, SET = 1, PRINT = 2, IF = 3, FOR = 4;
+    static final String[] KIND_EMOJI = {"📥", "📦", "💬", "❓", "🔁"};
+    static final String[] KIND_NAME = {"Ask", "Set", "Print", "If", "Repeat"};
+    static final int[] KIND_COLOR = {0xFF1A9FD6, 0xFFFF8A3D, 0xFF8E6BFF, 0xFF22B573, 0xFFFF5C8A};
+    static final String[] OPS = {"=", "≠", ">", "<", "≥", "≤", "is divisible by"};
 
     static class Block {
         int kind;
-        String variable = "";
-        String text = "";
-        int divisor = 2, remainder = 0, from = 1, to = 5;
+        String name = "";       // ASK / SET / FOR: variable name (typed)
+        String value = "";      // SET: value (typed)
+        String text = "";       // PRINT: text (typed)
+        String variable = "";   // PRINT: variable to show / IF: variable to test
+        String op = "=";        // IF
+        String right = "";      // IF: value to compare with (typed)
+        String from = "1";      // FOR
+        String to = "5";        // FOR
         List<Block> thenBody = new ArrayList<>();
         List<Block> elseBody = new ArrayList<>();
         List<Block> body = new ArrayList<>();
@@ -49,15 +79,15 @@ public class MainActivity extends AppCompatActivity {
         Block(int kind) { this.kind = kind; }
     }
 
-    static Block newBlock(int kind, Level lv) {
+    static Block newBlock(int kind) {
         Block b = new Block(kind);
-        b.variable = (kind == PRINT) ? NONE : lv.vars[0];
-        b.text = lv.texts[0];
+        if (kind == PRINT) b.variable = NONE;
+        if (kind == FOR) b.name = "i";
         return b;
     }
 
     /* ============================================================
-       2. LEVELS (data only - add more here later)
+       2. LEVELS
        ============================================================ */
 
     static class TestCase {
@@ -70,14 +100,11 @@ public class MainActivity extends AppCompatActivity {
 
     static class Level {
         String title, task, concept, hint;
-        String[] vars, texts;   // variable names / Print text choices
-        int[] kinds;            // blocks available in the palette
+        int[] kinds;
         List<TestCase> tests;
-
-        Level(String title, String task, String concept, String hint,
-              String[] vars, String[] texts, int[] kinds, List<TestCase> tests) {
-            this.title = title; this.task = task; this.concept = concept; this.hint = hint;
-            this.vars = vars; this.texts = texts; this.kinds = kinds; this.tests = tests;
+        Level(String title, String task, String concept, String hint, int[] kinds, List<TestCase> tests) {
+            this.title = title; this.task = task; this.concept = concept;
+            this.hint = hint; this.kinds = kinds; this.tests = tests;
         }
     }
 
@@ -87,11 +114,9 @@ public class MainActivity extends AppCompatActivity {
         list.add(new Level(
                 "Say Hello",
                 "Ask for a name, then print Hello and the name.",
-                "INPUT gets a value. A VARIABLE is a box that remembers it. PRINT shows it.",
-                "Use 'Get input' first so the name is stored. Then Print \"Hello \" + name.",
-                new String[]{"name"},
-                new String[]{"Hello ", "Bye "},
-                new int[]{INPUT, PRINT},
+                "ASK gets a value while the program runs. A VARIABLE is a named box that remembers it. PRINT shows it.",
+                "Ask for a variable called name. Then Print the text Hello and pick name in the dropdown.",
+                new int[]{ASK, SET, PRINT},
                 Arrays.asList(
                         new TestCase(Arrays.asList("Asha"), Arrays.asList("Hello Asha")),
                         new TestCase(Arrays.asList("Ravi"), Arrays.asList("Hello Ravi")),
@@ -99,13 +124,10 @@ public class MainActivity extends AppCompatActivity {
 
         list.add(new Level(
                 "Odd or Even",
-                "Get a number. Print Even if it is even, otherwise print Odd.",
-                "IF / OTHERWISE lets a program choose. The remainder after dividing by 2 tells odd from even.",
-                "Even numbers leave remainder 0 when divided by 2. Put Print \"Even\" in 'then' and " +
-                        "Print \"Odd\" in 'otherwise'. Tap a box to highlight it before adding blocks.",
-                new String[]{"n"},
-                new String[]{"Even", "Odd"},
-                new int[]{INPUT, PRINT, IF},
+                "Ask for a number. Print Even if it is even, otherwise print Odd.",
+                "IF / OTHERWISE lets a program choose. An even number is divisible by 2.",
+                "Ask for n. Add an If: n is divisible by 2. Put Print Even in the top box and Print Odd under 'otherwise'.",
+                new int[]{ASK, SET, PRINT, IF},
                 Arrays.asList(
                         new TestCase(Arrays.asList("4"), Arrays.asList("Even")),
                         new TestCase(Arrays.asList("7"), Arrays.asList("Odd")),
@@ -117,54 +139,120 @@ public class MainActivity extends AppCompatActivity {
         list.add(new Level(
                 "Count to 10",
                 "Print the numbers 1 to 10, one per line.",
-                "A FOR LOOP repeats blocks. The variable i changes each time around.",
-                "Add a For loop from 1 to 10. Highlight its inner box, then add Print and choose the variable i.",
-                new String[]{"i"},
-                new String[]{""},
-                new int[]{PRINT, FOR},
+                "A REPEAT (for) loop runs the blocks inside it again and again. The variable i counts for you.",
+                "Use Repeat from 1 to 10. Put a Print inside it and pick i in the variable dropdown.",
+                new int[]{SET, PRINT, FOR},
                 Arrays.asList(new TestCase(new ArrayList<String>(), oneToTen))));
 
         return list;
     }
 
     /* ============================================================
-       3. INTERPRETER (runs the blocks and collects printed output)
+       3. INTERPRETER
        ============================================================ */
 
-    static class Runner {
-        Map<String, String> vars = new HashMap<>();
-        List<String> inputs;
-        List<String> out = new ArrayList<>();
-        int inputIndex = 0, steps = 0;
+    static class ProgramError extends RuntimeException {
+        ProgramError(String m) { super(m); }
+    }
 
-        Runner(List<String> inputs) { this.inputs = inputs; }
+    static class Stop extends RuntimeException { }
+
+    static Double num(String s) {
+        try { return Double.valueOf(s.trim()); } catch (Exception e) { return null; }
+    }
+
+    static boolean compare(String l, String op, String r) {
+        Double a = num(l), c = num(r);
+        if (op.equals("is divisible by")) {
+            if (a == null || c == null || c.intValue() == 0) return false;
+            return a.longValue() % c.longValue() == 0;
+        }
+        int cmp = (a != null && c != null) ? Double.compare(a, c) : l.trim().compareToIgnoreCase(r.trim());
+        switch (op) {
+            case "=": return cmp == 0;
+            case "≠": return cmp != 0;
+            case ">": return cmp > 0;
+            case "<": return cmp < 0;
+            case "≥": return cmp >= 0;
+            case "≤": return cmp <= 0;
+            default: return false;
+        }
+    }
+
+    static class Runner {
+        interface IO {
+            String read(String name);
+            void print(String line);
+        }
+
+        final IO io;
+        final Map<String, String> vars = new HashMap<>();
+        int steps = 0;
+
+        Runner(IO io) { this.io = io; }
+
+        void tick() {
+            if (Thread.currentThread().isInterrupted()) throw new Stop();
+            if (++steps > 5000) throw new ProgramError("Too many steps - is a loop running forever?");
+        }
+
+        String needName(String n) {
+            String t = n.trim();
+            if (t.isEmpty()) throw new ProgramError("A block is missing its variable name.");
+            return t;
+        }
+
+        String get(String n) {
+            String v = vars.get(n.trim());
+            if (v == null) throw new ProgramError("\"" + n + "\" has no value yet. Use Ask or Set before this block.");
+            return v;
+        }
+
+        String resolve(String s) {
+            String t = s.trim();
+            return vars.containsKey(t) ? vars.get(t) : s;
+        }
+
+        int toInt(String s) {
+            Double d = num(resolve(s));
+            if (d == null) throw new ProgramError("Repeat needs numbers, but got \"" + s + "\".");
+            return d.intValue();
+        }
 
         void run(List<Block> list) {
-            for (Block b : list) {
-                if (++steps > 2000) {
-                    throw new IllegalStateException("Too many steps - is there a loop that never ends?");
-                }
+            for (Block b : new ArrayList<>(list)) {
+                tick();
                 switch (b.kind) {
-                    case INPUT: {
-                        vars.put(b.variable, inputIndex < inputs.size() ? inputs.get(inputIndex) : "");
-                        inputIndex++;
+                    case ASK: {
+                        String n = needName(b.name);
+                        vars.put(n, io.read(n));
+                        break;
+                    }
+                    case SET: {
+                        vars.put(needName(b.name), b.value);
                         break;
                     }
                     case PRINT: {
-                        String v = b.variable.equals(NONE) ? "" : vars.getOrDefault(b.variable, "");
-                        out.add(b.text + v);
+                        String out = b.text;
+                        if (!b.variable.isEmpty() && !b.variable.equals(NONE)) {
+                            String v = get(b.variable);
+                            out = out.isEmpty() ? v : out + " " + v;
+                        }
+                        io.print(out);
                         break;
                     }
                     case IF: {
-                        int n;
-                        try { n = Integer.parseInt(vars.getOrDefault(b.variable, "")); }
-                        catch (NumberFormatException e) { n = 0; }
-                        if (n % b.divisor == b.remainder) run(b.thenBody); else run(b.elseBody);
+                        if (b.variable.isEmpty()) throw new ProgramError("Pick a variable in your If block.");
+                        if (compare(get(b.variable), b.op, resolve(b.right))) run(b.thenBody);
+                        else run(b.elseBody);
                         break;
                     }
                     case FOR: {
-                        for (int k = b.from; k <= b.to; k++) {
-                            vars.put(b.variable, String.valueOf(k));
+                        String n = needName(b.name);
+                        int from = toInt(b.from), to = toInt(b.to);
+                        for (int k = from; k <= to; k++) {
+                            tick();
+                            vars.put(n, String.valueOf(k));
                             run(b.body);
                         }
                         break;
@@ -174,56 +262,123 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
+    static String norm(String s) { return s.trim().replaceAll("\\s+", " ").toLowerCase(); }
+
     static class Result {
         List<String> inputs, expected, actual;
         String error;
         Result(List<String> i, List<String> e, List<String> a, String err) {
             inputs = i; expected = e; actual = a; error = err;
         }
-        boolean passed() { return error == null && expected.equals(actual); }
+        boolean passed() {
+            if (error != null || expected.size() != actual.size()) return false;
+            for (int i = 0; i < expected.size(); i++) {
+                if (!norm(expected.get(i)).equals(norm(actual.get(i)))) return false;
+            }
+            return true;
+        }
     }
 
-    static List<Result> runTests(Level lv, List<Block> program) {
+    /** Silent run against every test case (no popups). */
+    static List<Result> runTests(Level lv, List<Block> prog) {
         List<Result> results = new ArrayList<>();
         for (TestCase t : lv.tests) {
-            Runner r = new Runner(t.inputs);
+            final List<String> out = new ArrayList<>();
+            final List<String> in = t.inputs;
+            final int[] idx = {0};
+            Runner r = new Runner(new Runner.IO() {
+                public String read(String name) { return idx[0] < in.size() ? in.get(idx[0]++) : ""; }
+                public void print(String line) { out.add(line); }
+            });
             try {
-                r.run(program);
-                results.add(new Result(t.inputs, t.expected, r.out, null));
-            } catch (Exception e) {
-                results.add(new Result(t.inputs, t.expected, r.out, e.getMessage()));
+                r.run(prog);
+                results.add(new Result(t.inputs, t.expected, out, null));
+            } catch (ProgramError e) {
+                results.add(new Result(t.inputs, t.expected, out, e.getMessage()));
+            } catch (RuntimeException e) {
+                results.add(new Result(t.inputs, t.expected, out, "Something went wrong."));
             }
         }
         return results;
     }
 
+    static boolean allPassed(List<Result> rs) {
+        for (Result r : rs) if (!r.passed()) return false;
+        return true;
+    }
+
     /* ============================================================
-       4. UI (all built in code, no XML needed)
+       4. UI STATE
        ============================================================ */
 
-    List<Level> levels = buildLevels();
-    boolean[] done = new boolean[levels.size()];
+    static class Slot {
+        View view;
+        List<Block> list;
+        List<View> children = new ArrayList<>();
+        Slot(View v, List<Block> l) { view = v; list = l; }
+    }
+
+    final Typeface TITLE_FONT = Typeface.create("sans-serif-black", Typeface.NORMAL);
+    final Typeface BODY_FONT = Typeface.create("sans-serif-medium", Typeface.NORMAL);
+
+    final List<Level> levels = buildLevels();
+    final boolean[] done = new boolean[levels.size()];
     int current = -1;
-    List<Block> program;
-    List<Block> selected;
-    List<Result> results;
+    List<Block> program = new ArrayList<>();
+
+    boolean running;
+    int runId;
+    Thread runThread;
+    AlertDialog activeDialog;
+    String outputText = "";
+    String errorText = null;
+    List<Result> results = null;
 
     FrameLayout root;
-    LinearLayout gameCol;
+    View dropLine, trayView;
+    ScrollView workScroll, panelScroll;
+    LinearLayout workCol, panelCol;
+    TextView runBtn;
+    Drawable trayNormal, trayHot;
     OnBackPressedCallback backCallback;
+    final Handler handler = new Handler(Looper.getMainLooper());
+
+    final List<Slot> slots = new ArrayList<>();
+    boolean dragging;
+    float lastDragX, lastDragY;
+    Object lastState;
+    List<Block> targetList;
+    int targetIndex;
+    boolean overTray;
+
+    /* ============================================================
+       5. ACTIVITY + SCREENS
+       ============================================================ */
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        WindowCompat.setDecorFitsSystemWindows(getWindow(), false);
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
+
         root = new FrameLayout(this);
-        root.setBackgroundColor(Color.WHITE);
+        root.setBackground(new GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{0xFF2B2370, 0xFF14123A}));
         ViewCompat.setOnApplyWindowInsetsListener(root, (v, insets) -> {
             Insets bars = insets.getInsets(WindowInsetsCompat.Type.systemBars());
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+            Insets ime = insets.getInsets(WindowInsetsCompat.Type.ime());
+            v.setPadding(bars.left, bars.top, bars.right, Math.max(bars.bottom, ime.bottom));
+            if (trayView != null) {
+                trayView.setVisibility(insets.isVisible(WindowInsetsCompat.Type.ime()) ? View.GONE : View.VISIBLE);
+            }
             return insets;
         });
         setContentView(root);
+
+        WindowInsetsControllerCompat c = WindowCompat.getInsetsController(getWindow(), root);
+        c.setAppearanceLightStatusBars(false);
+        c.setAppearanceLightNavigationBars(false);
 
         backCallback = new OnBackPressedCallback(false) {
             @Override
@@ -234,309 +389,913 @@ public class MainActivity extends AppCompatActivity {
         showMenu();
     }
 
+    @Override
+    protected void onDestroy() {
+        stopRun();
+        super.onDestroy();
+    }
+
     /* ---------- Level menu ---------- */
 
     void showMenu() {
+        stopRun();
         current = -1;
+        trayView = null;
         backCallback.setEnabled(false);
+        root.setOnDragListener(null);
         root.removeAllViews();
 
+        ScrollView sv = new ScrollView(this);
         LinearLayout col = new LinearLayout(this);
         col.setOrientation(LinearLayout.VERTICAL);
-        col.setPadding(dp(20), dp(20), dp(20), dp(20));
-        root.addView(col);
+        col.setPadding(dp(20), dp(24), dp(20), dp(24));
+        sv.addView(col);
+        root.addView(sv, new FrameLayout.LayoutParams(-1, -1));
 
-        add(col, text("🧩 Block Coder", 32, Color.BLACK, true));
-        add(col, text("Pick a level", 18, Color.DKGRAY, false));
+        add(col, text("🧩 Block Coder", 36, Color.WHITE, true));
+        add(col, text("Pick a level and start coding!", 16, 0xFFC9C3FF, false));
 
+        int[] tileColors = {0xFFFF8A3D, 0xFF8E6BFF, 0xFFFF5C8A};
         for (int i = 0; i < levels.size(); i++) {
             final int idx = i;
+            Level lv = levels.get(i);
             boolean unlocked = (i == 0) || done[i - 1];
             String icon = done[i] ? "✅" : (unlocked ? "▶" : "🔒");
-            Button b = button(icon + "  Level " + (i + 1) + ": " + levels.get(i).title, v -> showGame(idx));
-            b.setEnabled(unlocked);
-            b.setTextSize(18);
-            add(col, b);
+
+            LinearLayout tile = new LinearLayout(this);
+            tile.setOrientation(LinearLayout.VERTICAL);
+            tile.setBackground(block3d(unlocked ? tileColors[i % tileColors.length] : 0xFF5A557F, dp(16)));
+            tile.setPadding(dp(18), dp(16), dp(18), dp(20));
+            TextView t1 = text(icon + "  Level " + (i + 1) + " · " + lv.title, 20, Color.WHITE, true);
+            TextView t2 = text(lv.task, 13, 0xDDFFFFFF, false);
+            tile.addView(t1);
+            tile.addView(t2);
+            if (unlocked) tile.setOnClickListener(v -> showGame(idx));
+            add(col, tile);
         }
     }
 
     /* ---------- Game screen ---------- */
 
     void showGame(int idx) {
+        stopRun();
         current = idx;
         program = new ArrayList<>();
-        selected = program;
+        outputText = "";
+        errorText = null;
         results = null;
         backCallback.setEnabled(true);
-
         root.removeAllViews();
-        ScrollView sv = new ScrollView(this);
-        gameCol = new LinearLayout(this);
-        gameCol.setOrientation(LinearLayout.VERTICAL);
-        gameCol.setPadding(dp(12), dp(12), dp(12), dp(60));
-        sv.addView(gameCol);
-        root.addView(sv);
 
-        renderGame();
+        Level lv = levels.get(idx);
+        LinearLayout screen = new LinearLayout(this);
+        screen.setOrientation(LinearLayout.VERTICAL);
+
+        // top bar
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(dp(8), dp(6), dp(8), dp(6));
+        TextView back = pill("←", 0xFF5A557F, Color.WHITE, 16);
+        back.setOnClickListener(v -> showMenu());
+        bar.addView(back);
+        TextView title = text("Level " + (idx + 1) + " · " + lv.title, 18, Color.WHITE, true);
+        title.setPadding(dp(12), 0, dp(8), 0);
+        bar.addView(title, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        runBtn = pill("▶ Run", 0xFF2ECC71, Color.WHITE, 16);
+        runBtn.setOnClickListener(v -> toggleRun());
+        bar.addView(runBtn);
+        TextView reset = pill("↺", 0xFF5A557F, Color.WHITE, 16);
+        reset.setOnClickListener(v -> resetProgram());
+        LinearLayout.LayoutParams rlp = new LinearLayout.LayoutParams(-2, -2);
+        rlp.leftMargin = dp(6);
+        bar.addView(reset, rlp);
+        screen.addView(bar);
+
+        // workspace
+        workScroll = new ScrollView(this);
+        workCol = new LinearLayout(this);
+        workCol.setOrientation(LinearLayout.VERTICAL);
+        workCol.setPadding(dp(12), dp(4), dp(12), dp(24));
+        workScroll.addView(workCol);
+        screen.addView(workScroll, new LinearLayout.LayoutParams(-1, 0, 1f));
+
+        // output / results panel
+        panelScroll = new ScrollView(this);
+        panelScroll.setBackground(rounded(0xFF0B0A24, dp(12)));
+        panelCol = new LinearLayout(this);
+        panelCol.setOrientation(LinearLayout.VERTICAL);
+        panelCol.setPadding(dp(12), dp(8), dp(12), dp(8));
+        panelScroll.addView(panelCol);
+        LinearLayout.LayoutParams plp = new LinearLayout.LayoutParams(-1, dp(150));
+        plp.setMargins(dp(10), dp(4), dp(10), dp(6));
+        screen.addView(panelScroll, plp);
+
+        // card tray
+        trayView = buildTray(lv);
+        screen.addView(trayView);
+
+        root.addView(screen, new FrameLayout.LayoutParams(-1, -1));
+
+        dropLine = new View(this);
+        dropLine.setBackground(rounded(0xFFFFD54F, dp(3)));
+        dropLine.setVisibility(View.GONE);
+        root.addView(dropLine, new FrameLayout.LayoutParams(dp(100), dp(5)));
+
+        root.setOnDragListener(this::onDrag);
+
+        updateRunButton();
+        renderWorkspace();
+        renderPanel();
     }
 
-    void renderGame() {
-        final Level lv = levels.get(current);
-        gameCol.removeAllViews();
+    /* ---------- Workspace: Start block + Lego stack ---------- */
 
-        add(gameCol, button("← Menu", v -> showMenu()));
-        add(gameCol, text(lv.title, 26, Color.BLACK, true));
-        add(gameCol, text(lv.task, 16, Color.BLACK, false));
-        add(gameCol, text("💡 " + lv.concept, 13, Color.GRAY, false));
+    void renderWorkspace() {
+        slots.clear();
+        workCol.removeAllViews();
+        Level lv = levels.get(current);
 
-        add(gameCol, text("YOUR PROGRAM", 14, Color.BLACK, true));
-        add(gameCol, listView(program, lv));
+        LinearLayout info = new LinearLayout(this);
+        info.setOrientation(LinearLayout.VERTICAL);
+        info.setBackground(rounded(0x22FFFFFF, dp(12)));
+        info.setPadding(dp(12), dp(10), dp(12), dp(10));
+        info.addView(text(lv.task, 16, Color.WHITE, true));
+        info.addView(text("💡 " + lv.concept, 13, 0xFFC9C3FF, false));
+        add(workCol, info);
 
-        add(gameCol, text("BLOCKS  (tap to add into the orange box)", 14, Color.BLACK, true));
-        FlowLayout palette = new FlowLayout(this);
-        for (final int kind : lv.kinds) {
-            palette.addView(button(KIND_LABELS[kind], v -> {
-                selected.add(newBlock(kind, lv));
-                results = null;
-                renderGame();
-            }));
-        }
-        add(gameCol, palette);
+        TextView start = text("▶  Start", 18, 0xFF3B2F00, true);
+        start.setBackground(block3d(0xFFFFC933, dp(14)));
+        start.setPadding(dp(16), dp(10), dp(16), dp(15));
+        add(workCol, start);
 
-        LinearLayout actions = new LinearLayout(this);
-        actions.setOrientation(LinearLayout.HORIZONTAL);
-        Button run = button("▶ RUN", v -> {
-            results = runTests(lv, program);
-            boolean all = true;
-            for (Result r : results) if (!r.passed()) all = false;
-            if (all) done[current] = true;
-            renderGame();
-        });
-        run.setBackgroundColor(Color.parseColor("#2E7D32"));
-        run.setTextColor(Color.WHITE);
-        actions.addView(run);
-        actions.addView(button("↺ RESET", v -> {
-            program.clear();
-            selected = program;
-            results = null;
-            renderGame();
-        }));
-        add(gameCol, actions);
-
-        if (results != null) {
-            add(gameCol, text("TEST RESULTS", 14, Color.BLACK, true));
-            boolean all = true;
-            for (Result r : results) {
-                String inp = r.inputs.isEmpty() ? "(none)" : join(r.inputs, ", ");
-                String out = r.actual.isEmpty() ? "(nothing printed)" : join(r.actual, " ");
-                String line;
-                if (r.passed()) {
-                    line = "✅ Input: " + inp + " → " + out;
-                } else {
-                    all = false;
-                    line = "❌ Input: " + inp + " → " + out + "\n    expected: " + join(r.expected, " ")
-                            + (r.error != null ? "\n    " + r.error : "");
-                }
-                add(gameCol, text(line, 14, Color.BLACK, false));
-            }
-            if (all) {
-                add(gameCol, text("🎉 You did it!", 22, Color.parseColor("#2E7D32"), true));
-                add(gameCol, button("Back to menu", v -> showMenu()));
-            } else {
-                add(gameCol, text("💡 Hint: " + lv.hint, 14, Color.parseColor("#1565C0"), false));
-            }
-        }
+        add(workCol, slotView(program, lv, true));
     }
 
-    /* ---------- A box that holds blocks (a "slot") ---------- */
-
-    View listView(final List<Block> list, Level lv) {
+    /** A box that holds a vertical stack of blocks. */
+    View slotView(List<Block> list, Level lv, boolean isRoot) {
         LinearLayout box = new LinearLayout(this);
         box.setOrientation(LinearLayout.VERTICAL);
-        box.setPadding(dp(6), dp(6), dp(6), dp(6));
-        boolean isSel = (list == selected);
-        box.setBackground(bg(Color.WHITE, isSel ? Color.parseColor("#FF9800") : Color.LTGRAY, dp(2)));
-        box.setOnClickListener(v -> {
-            selected = list;
-            renderGame();
-        });
+        box.setMinimumHeight(dp(isRoot ? 110 : 44));
+        box.setPadding(dp(4), dp(4), dp(4), dp(4));
+        box.setBackground(rounded(0x1AFFFFFF, dp(10)));
+
+        Slot s = new Slot(box, list);
+        slots.add(s);
 
         if (list.isEmpty()) {
-            add(box, text("(empty - tap here, then add blocks)", 12, Color.GRAY, false));
+            TextView hint = text(isRoot ? "Drag cards here ⬆" : "drop blocks here", 13, 0x88FFFFFF, false);
+            hint.setGravity(Gravity.CENTER);
+            hint.setPadding(0, dp(isRoot ? 36 : 10), 0, dp(10));
+            box.addView(hint);
         }
         for (Block b : new ArrayList<>(list)) {
-            add(box, blockView(b, list, lv));
+            View v = blockView(b, list, lv);
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+            lp.topMargin = dp(1);
+            box.addView(v, lp);
+            s.children.add(v);
         }
         return box;
     }
 
-    /* ---------- One block ---------- */
-
+    /** One block (simple blocks) or one C-shaped block (If / Repeat) with an indented slot. */
     View blockView(final Block b, final List<Block> parent, final Level lv) {
-        int color;
-        switch (b.kind) {
-            case INPUT: color = Color.parseColor("#43A047"); break;
-            case PRINT: color = Color.parseColor("#1E88E5"); break;
-            case IF:    color = Color.parseColor("#F57C00"); break;
-            default:    color = Color.parseColor("#8E24AA"); break;
-        }
+        int color = KIND_COLOR[b.kind];
 
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(8), dp(8), dp(8), dp(8));
-        card.setBackground(bg(color, 0, 0));
 
-        // header row: [controls ...............] [✕]
         LinearLayout header = new LinearLayout(this);
         header.setOrientation(LinearLayout.HORIZONTAL);
-        FlowLayout controls = new FlowLayout(this);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.setBackground(block3d(color, dp(10)));
+        header.setPadding(dp(2), dp(6), dp(4), dp(9));
+
+        TextView handle = text("≡", 24, 0xDDFFFFFF, true);
+        handle.setPadding(dp(10), dp(2), dp(10), dp(2));
+        attachHandleDrag(handle, card, b);
+        header.addView(handle);
+
+        FlowLayout controls = new FlowLayout(this, dp(6));
         header.addView(controls, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
 
-        Button remove = new Button(this);
-        remove.setText("✕");
-        remove.setTextColor(Color.WHITE);
-        remove.setBackgroundColor(Color.TRANSPARENT);
-        remove.setMinWidth(0);
-        remove.setMinimumWidth(0);
-        remove.setOnClickListener(v -> {
-            parent.remove(b);
-            selected = program;
-            results = null;
-            renderGame();
-        });
-        header.addView(remove);
-        card.addView(header);
-
         switch (b.kind) {
-            case INPUT:
-                controls.addView(label("📥 get input → store in"));
-                controls.addView(picker(b.variable, lv.vars, i -> b.variable = lv.vars[i]));
+            case ASK:
+                controls.addView(label("📥 ask for"));
+                controls.addView(field(b.name, "name", s -> b.name = s));
                 break;
-
-            case PRINT: {
+            case SET:
+                controls.addView(label("📦 set"));
+                controls.addView(field(b.name, "name", s -> b.name = s));
+                controls.addView(label("to"));
+                controls.addView(field(b.value, "value", s -> b.value = s));
+                break;
+            case PRINT:
                 controls.addView(label("💬 print"));
-                String[] textLabels = new String[lv.texts.length];
-                for (int i = 0; i < textLabels.length; i++) textLabels[i] = fmt(lv.texts[i]);
-                controls.addView(picker(fmt(b.text), textLabels, i -> b.text = lv.texts[i]));
+                controls.addView(field(b.text, "text", s -> b.text = s));
                 controls.addView(label("+"));
-                final String[] varOptions = new String[lv.vars.length + 1];
-                varOptions[0] = NONE;
-                System.arraycopy(lv.vars, 0, varOptions, 1, lv.vars.length);
-                controls.addView(picker(b.variable, varOptions, i -> b.variable = varOptions[i]));
+                controls.addView(picker(b.variable, NONE, () -> {
+                    List<String> o = new ArrayList<>();
+                    o.add(NONE);
+                    o.addAll(names());
+                    return o;
+                }, s -> b.variable = s));
                 break;
-            }
-
             case IF:
                 controls.addView(label("❓ if"));
-                controls.addView(picker(b.variable, lv.vars, i -> b.variable = lv.vars[i]));
-                controls.addView(label("÷"));
-                controls.addView(picker("" + b.divisor, range(1, 10), i -> b.divisor = i + 1));
-                controls.addView(label("leaves remainder"));
-                controls.addView(picker("" + b.remainder, range(0, 9), i -> b.remainder = i));
-                add(card, label("then:"));
-                add(card, listView(b.thenBody, lv));
-                add(card, label("otherwise:"));
-                add(card, listView(b.elseBody, lv));
+                controls.addView(picker(b.variable, "variable", () -> names(), s -> b.variable = s));
+                controls.addView(picker(b.op, "=", () -> Arrays.asList(OPS), s -> b.op = s));
+                controls.addView(field(b.right, "value", s -> b.right = s));
                 break;
-
             case FOR:
-                controls.addView(label("🔁 for"));
-                controls.addView(picker(b.variable, lv.vars, i -> b.variable = lv.vars[i]));
+                controls.addView(label("🔁 repeat"));
+                controls.addView(field(b.name, "i", s -> b.name = s));
                 controls.addView(label("from"));
-                controls.addView(picker("" + b.from, range(1, 10), i -> b.from = i + 1));
+                controls.addView(field(b.from, "1", s -> b.from = s));
                 controls.addView(label("to"));
-                controls.addView(picker("" + b.to, range(1, 10), i -> b.to = i + 1));
-                add(card, label("repeat:"));
-                add(card, listView(b.body, lv));
+                controls.addView(field(b.to, "10", s -> b.to = s));
                 break;
+        }
+
+        TextView x = text("✕", 16, 0xDDFFFFFF, true);
+        x.setPadding(dp(10), dp(4), dp(8), dp(4));
+        x.setOnClickListener(v -> {
+            if (running) return;
+            parent.remove(b);
+            results = null;
+            renderWorkspace();
+        });
+        header.addView(x);
+        card.addView(header);
+
+        if (b.kind == IF) {
+            card.addView(cRow(color, slotView(b.thenBody, lv, false)));
+            card.addView(labelBar("otherwise", color));
+            card.addView(cRow(color, slotView(b.elseBody, lv, false)));
+            card.addView(footer(color));
+        } else if (b.kind == FOR) {
+            card.addView(cRow(color, slotView(b.body, lv, false)));
+            card.addView(footer(color));
         }
         return card;
     }
 
-    /* ---------- Small UI helpers ---------- */
-
-    /** A dropdown button. onPick receives the index of the chosen option. */
-    Button picker(String current, final String[] options, final Consumer<Integer> onPick) {
-        final Button btn = new Button(this);
-        btn.setText(current + " ▾");
-        btn.setAllCaps(false);
-        btn.setMinWidth(0);
-        btn.setMinimumWidth(0);
-        btn.setOnClickListener(v -> {
-            PopupMenu pm = new PopupMenu(this, btn);
-            for (int i = 0; i < options.length; i++) pm.getMenu().add(0, i, i, options[i]);
-            pm.setOnMenuItemClickListener(item -> {
-                onPick.accept(item.getItemId());
-                results = null;
-                renderGame();
-                return true;
-            });
-            pm.show();
-        });
-        return btn;
+    /** Rail on the left (the indent) + the inner slot. */
+    View cRow(int color, View slotBox) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        View rail = new View(this);
+        rail.setBackgroundColor(color);
+        row.addView(rail, new LinearLayout.LayoutParams(dp(20), ViewGroup.LayoutParams.MATCH_PARENT));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        row.addView(slotBox, lp);
+        return row;
     }
 
-    TextView label(String s) {
-        TextView t = text(s, 14, Color.WHITE, true);
-        t.setPadding(dp(6), dp(14), dp(6), dp(6));
+    View labelBar(String s, int color) {
+        TextView t = text(s, 13, Color.WHITE, true);
+        t.setBackgroundColor(color);
+        t.setPadding(dp(26), dp(4), dp(10), dp(4));
         return t;
     }
 
-    TextView text(String s, float sizeSp, int color, boolean bold) {
-        TextView t = new TextView(this);
-        t.setText(s);
-        t.setTextSize(sizeSp);
-        t.setTextColor(color);
-        if (bold) t.setTypeface(Typeface.DEFAULT_BOLD);
-        return t;
-    }
-
-    Button button(String s, View.OnClickListener l) {
-        Button b = new Button(this);
-        b.setText(s);
-        b.setAllCaps(false);
-        b.setOnClickListener(l);
-        return b;
-    }
-
-    /** Adds a view with a small top margin when the parent is a vertical LinearLayout. */
-    void add(ViewGroup parent, View child) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(6);
-        parent.addView(child, lp);
-    }
-
-    GradientDrawable bg(int fill, int stroke, int strokeWidth) {
+    View footer(int color) {
+        View f = new View(this);
         GradientDrawable g = new GradientDrawable();
-        g.setColor(fill);
-        g.setCornerRadius(dp(8));
-        if (strokeWidth > 0) g.setStroke(strokeWidth, stroke);
+        g.setColor(color);
+        float r = dp(10);
+        g.setCornerRadii(new float[]{0, 0, 0, 0, r, r, r, r});
+        f.setBackground(g);
+        f.setLayoutParams(new LinearLayout.LayoutParams(-1, dp(14)));
+        return f;
+    }
+
+    /* ---------- Card tray (bottom) ---------- */
+
+    View buildTray(final Level lv) {
+        LinearLayout tray = new LinearLayout(this);
+        tray.setOrientation(LinearLayout.VERTICAL);
+        tray.setPadding(dp(6), dp(8), dp(6), dp(8));
+        trayNormal = trayBg(0xFF0E0C2E);
+        trayHot = trayBg(0xFF7A1F2B);
+        tray.setBackground(trayNormal);
+
+        TextView hint = text("Swipe a card up into your program, or tap it. Drag a block back here to delete it.",
+                12, 0xFFB9B3F5, false);
+        hint.setGravity(Gravity.CENTER);
+        tray.addView(hint);
+
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(dp(4), dp(6), dp(4), dp(2));
+        for (int kind : lv.kinds) {
+            LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(dp(96), dp(110));
+            lp.setMargins(dp(5), 0, dp(5), 0);
+            row.addView(trayCard(kind), lp);
+        }
+        hs.addView(row);
+        tray.addView(hs);
+        return tray;
+    }
+
+    Drawable trayBg(int color) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(color);
+        float r = dp(18);
+        g.setCornerRadii(new float[]{r, r, r, r, 0, 0, 0, 0});
+        g.setStroke(dp(2), 0x55FFC933);
         return g;
     }
 
-    static String[] range(int a, int b) {
-        String[] r = new String[b - a + 1];
-        for (int i = 0; i < r.length; i++) r[i] = String.valueOf(a + i);
-        return r;
+    View trayCard(final int kind) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setGravity(Gravity.CENTER);
+        c.setBackground(block3d(KIND_COLOR[kind], dp(14)));
+        c.setPadding(dp(6), dp(8), dp(6), dp(12));
+        TextView e = text(KIND_EMOJI[kind], 34, Color.WHITE, false);
+        e.setGravity(Gravity.CENTER);
+        TextView n = text(KIND_NAME[kind], 15, Color.WHITE, true);
+        n.setGravity(Gravity.CENTER);
+        c.addView(e);
+        c.addView(n);
+
+        // tap = add to the end
+        c.setOnClickListener(v -> {
+            if (running) return;
+            program.add(newBlock(kind));
+            results = null;
+            renderWorkspace();
+            workScroll.post(() -> workScroll.fullScroll(View.FOCUS_DOWN));
+        });
+
+        // swipe up = start dragging (sideways swipes still scroll the tray)
+        final float[] st = new float[3];
+        final int slop = ViewConfiguration.get(this).getScaledTouchSlop();
+        c.setOnTouchListener((v, ev) -> {
+            if (running) return false;
+            switch (ev.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    st[0] = ev.getRawX();
+                    st[1] = ev.getRawY();
+                    st[2] = 0;
+                    return false;
+                case MotionEvent.ACTION_MOVE:
+                    float dx = ev.getRawX() - st[0], dy = ev.getRawY() - st[1];
+                    if (st[2] == 0 && dy < -slop && Math.abs(dy) > Math.abs(dx)) {
+                        st[2] = 1;
+                        v.getParent().requestDisallowInterceptTouchEvent(true);
+                        startDrag(v, kind);
+                        return true;
+                    }
+                    return false;
+                default:
+                    return false;
+            }
+        });
+        return c;
     }
 
-    static String fmt(String s) { return s.isEmpty() ? "(empty)" : "\"" + s + "\""; }
+    /* ---------- Dragging blocks that are already in the program ---------- */
 
-    static String join(List<String> list, String sep) {
+    void attachHandleDrag(View handle, final View card, final Block b) {
+        final float[] st = new float[3];
+        final int slop = ViewConfiguration.get(this).getScaledTouchSlop();
+        handle.setOnTouchListener((v, ev) -> {
+            if (running) return true;
+            switch (ev.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    st[0] = ev.getRawX();
+                    st[1] = ev.getRawY();
+                    st[2] = 0;
+                    v.getParent().requestDisallowInterceptTouchEvent(true);
+                    return true;
+                case MotionEvent.ACTION_MOVE:
+                    if (st[2] == 0 && Math.hypot(ev.getRawX() - st[0], ev.getRawY() - st[1]) > slop) {
+                        st[2] = 1;
+                        startDrag(card, b);
+                    }
+                    return true;
+                default:
+                    return true;
+            }
+        });
+    }
+
+    void startDrag(View shadowOf, Object state) {
+        ClipData cd = ClipData.newPlainText("block", "block");
+        shadowOf.startDragAndDrop(cd, new View.DragShadowBuilder(shadowOf), state, 0);
+    }
+
+    boolean onDrag(View v, DragEvent e) {
+        Object state = e.getLocalState();
+        switch (e.getAction()) {
+            case DragEvent.ACTION_DRAG_STARTED:
+                if (!(state instanceof Block) && !(state instanceof Integer)) return false;
+                dragging = true;
+                lastState = state;
+                handler.post(autoScroll);
+                return true;
+            case DragEvent.ACTION_DRAG_LOCATION: {
+                int[] l = new int[2];
+                v.getLocationOnScreen(l);
+                updateDrag(l[0] + e.getX(), l[1] + e.getY(), state);
+                return true;
+            }
+            case DragEvent.ACTION_DROP: {
+                int[] l = new int[2];
+                v.getLocationOnScreen(l);
+                updateDrag(l[0] + e.getX(), l[1] + e.getY(), state);
+                applyDrop(state);
+                return true;
+            }
+            case DragEvent.ACTION_DRAG_ENDED:
+                dragging = false;
+                handler.removeCallbacks(autoScroll);
+                if (dropLine != null) dropLine.setVisibility(View.GONE);
+                setTrayHot(false);
+                return true;
+            default:
+                return true;
+        }
+    }
+
+    final Runnable autoScroll = new Runnable() {
+        @Override
+        public void run() {
+            if (!dragging || workScroll == null) return;
+            Rect sr = rectOf(workScroll);
+            int edge = dp(70);
+            int step = dp(10);
+            if (lastDragY < sr.top + edge) {
+                workScroll.scrollBy(0, -step);
+                updateDrag(lastDragX, lastDragY, lastState);
+            } else if (lastDragY > sr.bottom - edge && lastDragY <= sr.bottom) {
+                workScroll.scrollBy(0, step);
+                updateDrag(lastDragX, lastDragY, lastState);
+            }
+            handler.postDelayed(this, 16);
+        }
+    };
+
+    /** Works out where the dragged block would land and shows the yellow drop line. */
+    void updateDrag(float sx, float sy, Object state) {
+        lastDragX = sx;
+        lastDragY = sy;
+        lastState = state;
+        targetList = null;
+
+        overTray = trayView != null && trayView.getVisibility() == View.VISIBLE
+                && rectOf(trayView).contains((int) sx, (int) sy);
+        setTrayHot(overTray && state instanceof Block);
+        if (overTray || slots.isEmpty()) {
+            dropLine.setVisibility(View.GONE);
+            return;
+        }
+        if (!rectOf(workScroll).contains((int) sx, (int) sy)) {
+            dropLine.setVisibility(View.GONE);
+            return;
+        }
+
+        // deepest (smallest) slot under the finger
+        Slot best = null;
+        long bestArea = Long.MAX_VALUE;
+        for (Slot s : slots) {
+            if (state instanceof Block && containsList((Block) state, s.list)) continue;
+            Rect r = rectOf(s.view);
+            if (r.contains((int) sx, (int) sy)) {
+                long area = (long) r.width() * r.height();
+                if (area < bestArea) {
+                    best = s;
+                    bestArea = area;
+                }
+            }
+        }
+        if (best == null) best = slots.get(0);   // main stack
+
+        int idx = best.children.size();
+        for (int i = 0; i < best.children.size(); i++) {
+            if (sy < rectOf(best.children.get(i)).centerY()) {
+                idx = i;
+                break;
+            }
+        }
+        targetList = best.list;
+        targetIndex = idx;
+
+        Rect sv = rectOf(best.view);
+        float ly;
+        if (best.children.isEmpty()) ly = sv.top + dp(8);
+        else if (idx < best.children.size()) ly = rectOf(best.children.get(idx)).top - dp(1);
+        else ly = rectOf(best.children.get(best.children.size() - 1)).bottom + dp(1);
+        showLine(sv.left + dp(6), ly - dp(2), sv.width() - dp(12));
+    }
+
+    void showLine(float x, float y, int w) {
+        int[] rl = new int[2];
+        root.getLocationOnScreen(rl);
+        FrameLayout.LayoutParams lp = (FrameLayout.LayoutParams) dropLine.getLayoutParams();
+        if (lp.width != w) {
+            lp.width = Math.max(w, dp(20));
+            dropLine.setLayoutParams(lp);
+        }
+        dropLine.setTranslationX(x - rl[0] - root.getPaddingLeft());
+        dropLine.setTranslationY(y - rl[1] - root.getPaddingTop());
+        dropLine.setVisibility(View.VISIBLE);
+    }
+
+    void setTrayHot(boolean hot) {
+        if (trayView != null) trayView.setBackground(hot ? trayHot : trayNormal);
+    }
+
+    void applyDrop(Object state) {
+        if (overTray) {                                   // dropped on the tray = delete
+            if (state instanceof Block) {
+                List<Block> p = findParent(program, (Block) state);
+                if (p != null) p.remove(state);
+                results = null;
+                renderWorkspace();
+            }
+            return;
+        }
+        if (targetList == null) return;
+        int idx = targetIndex;
+        if (state instanceof Block) {
+            Block b = (Block) state;
+            List<Block> from = findParent(program, b);
+            if (from != null) {
+                int oi = from.indexOf(b);
+                if (from == targetList && oi < idx) idx--;
+                from.remove(oi);
+            }
+            targetList.add(Math.min(idx, targetList.size()), b);
+        } else {
+            targetList.add(Math.min(idx, targetList.size()), newBlock((Integer) state));
+        }
+        results = null;
+        renderWorkspace();
+    }
+
+    static List<List<Block>> subLists(Block b) {
+        return Arrays.asList(b.thenBody, b.elseBody, b.body);
+    }
+
+    /** True if `list` is inside block b (so we can't drop a block into itself). */
+    static boolean containsList(Block b, List<Block> list) {
+        for (List<Block> sub : subLists(b)) {
+            if (sub == list) return true;
+            for (Block c : sub) if (containsList(c, list)) return true;
+        }
+        return false;
+    }
+
+    static List<Block> findParent(List<Block> list, Block target) {
+        if (list.contains(target)) return list;
+        for (Block b : list) {
+            for (List<Block> sub : subLists(b)) {
+                List<Block> r = findParent(sub, target);
+                if (r != null) return r;
+            }
+        }
+        return null;
+    }
+
+    Rect rectOf(View v) {
+        int[] l = new int[2];
+        v.getLocationOnScreen(l);
+        return new Rect(l[0], l[1], l[0] + v.getWidth(), l[1] + v.getHeight());
+    }
+
+    /* ---------- Variable names used in the program (for dropdowns) ---------- */
+
+    List<String> names() {
+        Set<String> s = new LinkedHashSet<>();
+        collect(program, s);
+        return new ArrayList<>(s);
+    }
+
+    void collect(List<Block> list, Set<String> out) {
+        for (Block b : list) {
+            if ((b.kind == ASK || b.kind == SET || b.kind == FOR) && !b.name.trim().isEmpty()) {
+                out.add(b.name.trim());
+            }
+            for (List<Block> sub : subLists(b)) collect(sub, out);
+        }
+    }
+
+    /* ============================================================
+       6. RUNNING THE PROGRAM
+       ============================================================ */
+
+    void toggleRun() {
+        if (running) {
+            stopRun();
+            outputText += "(stopped)\n";
+            updateRunButton();
+            renderWorkspace();
+            renderPanel();
+        } else {
+            startRun();
+        }
+    }
+
+    void stopRun() {
+        runId++;
+        if (runThread != null) runThread.interrupt();
+        runThread = null;
+        if (activeDialog != null) {
+            try { activeDialog.dismiss(); } catch (Exception ignored) { }
+            activeDialog = null;
+        }
+        running = false;
+    }
+
+    void resetProgram() {
+        stopRun();
+        program.clear();
+        outputText = "";
+        errorText = null;
+        results = null;
+        updateRunButton();
+        renderWorkspace();
+        renderPanel();
+    }
+
+    void startRun() {
+        final Level lv = levels.get(current);
+        final int myRun = ++runId;
+        running = true;
+        outputText = "";
+        errorText = null;
+        results = null;
+        updateRunButton();
+        renderWorkspace();
+        renderPanel();
+
+        final List<Block> prog = program;
+        runThread = new Thread(() -> {
+            String err = null;
+            Runner r = new Runner(new Runner.IO() {
+                @Override
+                public String read(String name) {
+                    final BlockingQueue<String> q = new ArrayBlockingQueue<>(1);
+                    runOnUiThread(() -> {
+                        if (myRun == runId) showInputDialog(name, q);
+                    });
+                    try { return q.take(); } catch (InterruptedException e) { throw new Stop(); }
+                }
+
+                @Override
+                public void print(String line) {
+                    if (myRun != runId) throw new Stop();
+                    runOnUiThread(() -> {
+                        if (myRun != runId) return;
+                        outputText += line + "\n";
+                        renderPanel();
+                    });
+                    try { Thread.sleep(140); } catch (InterruptedException e) { throw new Stop(); }
+                }
+            });
+            try {
+                r.run(prog);
+            } catch (Stop s) {
+                return;
+            } catch (ProgramError pe) {
+                err = pe.getMessage();
+            } catch (RuntimeException re) {
+                err = "Something went wrong.";
+            }
+            if (myRun != runId) return;
+
+            // after the real run, silently check the program with other inputs
+            final List<Result> res = (err == null) ? runTests(lv, prog) : null;
+            final String fe = err;
+            runOnUiThread(() -> {
+                if (myRun != runId) return;
+                running = false;
+                runThread = null;
+                errorText = fe;
+                results = res;
+                if (res != null && allPassed(res)) done[current] = true;
+                updateRunButton();
+                renderWorkspace();
+                renderPanel();
+            });
+        });
+        runThread.start();
+    }
+
+    void showInputDialog(String name, final BlockingQueue<String> q) {
+        final EditText et = new EditText(this);
+        et.setSingleLine(true);
+        et.setHint("type here");
+        FrameLayout wrap = new FrameLayout(this);
+        wrap.setPadding(dp(20), dp(8), dp(20), 0);
+        wrap.addView(et);
+        AlertDialog d = new AlertDialog.Builder(this)
+                .setTitle("📥 Input needed")
+                .setMessage("Type a value for \"" + name + "\"")
+                .setView(wrap)
+                .setCancelable(false)
+                .setPositiveButton("OK", (dlg, w) -> q.offer(et.getText().toString()))
+                .create();
+        if (d.getWindow() != null) {
+            d.getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_STATE_VISIBLE);
+        }
+        activeDialog = d;
+        d.show();
+        et.requestFocus();
+    }
+
+    void updateRunButton() {
+        if (runBtn == null) return;
+        runBtn.setText(running ? "■ Stop" : "▶ Run");
+        runBtn.setBackground(block3d(running ? 0xFFE74C3C : 0xFF2ECC71, dp(12)));
+        runBtn.setPadding(dp(14), dp(8), dp(14), dp(11));
+    }
+
+    /* ---------- Output + results panel ---------- */
+
+    void renderPanel() {
+        if (panelCol == null || current < 0) return;
+        panelCol.removeAllViews();
+        boolean show = running || !outputText.isEmpty() || errorText != null || results != null;
+        panelScroll.setVisibility(show ? View.VISIBLE : View.GONE);
+        if (!show) return;
+
+        panelCol.addView(text(running ? "OUTPUT  (running…)" : "OUTPUT", 12, 0xFF8EF0B2, true));
+        TextView out = new TextView(this);
+        out.setTypeface(Typeface.MONOSPACE);
+        out.setTextSize(14);
+        out.setTextColor(0xFFB8FFD0);
+        out.setText(outputText.isEmpty() ? "(nothing printed yet)" : outputText.trim());
+        panelCol.addView(out);
+
+        if (errorText != null) {
+            add(panelCol, text("⚠ " + errorText, 14, 0xFFFF8A80, true));
+        }
+        if (results != null) {
+            Level lv = levels.get(current);
+            int pass = 0;
+            for (Result r : results) if (r.passed()) pass++;
+            if (pass == results.size()) {
+                add(panelCol, text("🎉 Level complete!  (" + pass + "/" + results.size() + " checks passed)",
+                        18, 0xFFFFD54F, true));
+                LinearLayout btns = new LinearLayout(this);
+                btns.setOrientation(LinearLayout.HORIZONTAL);
+                if (current + 1 < levels.size()) {
+                    TextView next = pill("Next level ▶", 0xFF2ECC71, Color.WHITE, 14);
+                    next.setOnClickListener(v -> showGame(current + 1));
+                    btns.addView(next);
+                }
+                TextView menu = pill("Menu", 0xFF5A557F, Color.WHITE, 14);
+                menu.setOnClickListener(v -> showMenu());
+                LinearLayout.LayoutParams mlp = new LinearLayout.LayoutParams(-2, -2);
+                mlp.leftMargin = dp(8);
+                btns.addView(menu, mlp);
+                add(panelCol, btns);
+            } else {
+                add(panelCol, text(pass + "/" + results.size() + " checks passed", 14, 0xFFFFD54F, true));
+                int shown = 0;
+                for (Result r : results) {
+                    if (r.passed() || shown >= 3) continue;
+                    shown++;
+                    String inp = r.inputs.isEmpty() ? "(none)" : join(r.inputs);
+                    String got = r.actual.isEmpty() ? "(nothing)" : join(r.actual);
+                    String line = "❌ Input " + inp + " → got: " + got + "   expected: " + join(r.expected)
+                            + (r.error != null ? "\n    " + r.error : "");
+                    add(panelCol, text(line, 13, Color.WHITE, false));
+                }
+                add(panelCol, text("💡 " + lv.hint, 13, 0xFF9CC9FF, false));
+            }
+        }
+        panelScroll.post(() -> panelScroll.fullScroll(View.FOCUS_DOWN));
+    }
+
+    static String join(List<String> l) {
         StringBuilder sb = new StringBuilder();
-        for (int i = 0; i < list.size(); i++) {
-            if (i > 0) sb.append(sep);
-            sb.append(list.get(i));
+        for (int i = 0; i < l.size(); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(l.get(i));
         }
         return sb.toString();
     }
 
+    /* ============================================================
+       7. UI HELPERS
+       ============================================================ */
+
     int dp(int v) { return (int) (v * getResources().getDisplayMetrics().density); }
 
-    /** Lays children out left-to-right and wraps to a new line when full. */
+    TextView text(String s, float sp, int color, boolean bold) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextSize(sp);
+        t.setTextColor(color);
+        t.setTypeface(bold ? TITLE_FONT : BODY_FONT);
+        return t;
+    }
+
+    TextView label(String s) {
+        TextView t = text(s, 14, Color.WHITE, true);
+        t.setPadding(dp(2), dp(8), dp(2), dp(8));
+        return t;
+    }
+
+    TextView pill(String s, int fill, int textColor, float sp) {
+        TextView t = text(s, sp, textColor, true);
+        t.setGravity(Gravity.CENTER);
+        t.setBackground(block3d(fill, dp(12)));
+        t.setPadding(dp(14), dp(8), dp(14), dp(11));
+        t.setClickable(true);
+        return t;
+    }
+
+    /** Typed text box inside a block. Updates the block without redrawing the screen. */
+    EditText field(String value, String hint, final Consumer<String> onChange) {
+        EditText et = new EditText(this);
+        et.setSingleLine(true);
+        et.setText(value);
+        et.setHint(hint);
+        et.setTextSize(14);
+        et.setTypeface(BODY_FONT);
+        et.setTextColor(0xFF222222);
+        et.setHintTextColor(0x66000000);
+        et.setBackground(rounded(Color.WHITE, dp(8)));
+        et.setPadding(dp(8), dp(6), dp(8), dp(6));
+        et.setMinWidth(dp(56));
+        et.setEnabled(!running);
+        et.addTextChangedListener(new TextWatcher() {
+            @Override public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            @Override public void afterTextChanged(Editable s) { onChange.accept(s.toString()); }
+        });
+        return et;
+    }
+
+    /** Dropdown pill. Options are read when tapped, so they always reflect the latest names. */
+    TextView picker(String current, String placeholder, final Supplier<List<String>> options,
+                    final Consumer<String> onPick) {
+        final TextView t = text((current.isEmpty() ? placeholder : current) + " ▾", 14, 0xFF222222, true);
+        t.setBackground(rounded(Color.WHITE, dp(8)));
+        t.setPadding(dp(10), dp(8), dp(10), dp(8));
+        t.setEnabled(!running);
+        t.setOnClickListener(v -> {
+            PopupMenu pm = new PopupMenu(this, t);
+            List<String> opts = options.get();
+            if (opts.isEmpty()) {
+                pm.getMenu().add("(add an Ask or Set block first)").setEnabled(false);
+            }
+            for (String o : opts) pm.getMenu().add(o);
+            pm.setOnMenuItemClickListener(item -> {
+                String s = item.getTitle().toString();
+                onPick.accept(s);
+                t.setText(s + " ▾");
+                return true;
+            });
+            pm.show();
+        });
+        return t;
+    }
+
+    void add(ViewGroup parent, View child) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, -2);
+        lp.topMargin = dp(8);
+        parent.addView(child, lp);
+    }
+
+    GradientDrawable rounded(int color, int r) {
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(color);
+        g.setCornerRadius(r);
+        return g;
+    }
+
+    static int darken(int color) {
+        float[] hsv = new float[3];
+        Color.colorToHSV(color, hsv);
+        hsv[2] *= 0.72f;
+        return Color.HSVToColor(hsv);
+    }
+
+    /** Lego-style block: main colour with a darker strip along the bottom. */
+    Drawable block3d(int color, int r) {
+        LayerDrawable ld = new LayerDrawable(new Drawable[]{rounded(darken(color), r), rounded(color, r)});
+        ld.setLayerInset(1, 0, 0, 0, dp(3));
+        return ld;
+    }
+
+    /** Lays children out left-to-right and wraps onto a new line when the row is full. */
     static class FlowLayout extends ViewGroup {
-        FlowLayout(Context c) { super(c); }
+        final int gap;
+
+        FlowLayout(Context c, int gap) {
+            super(c);
+            this.gap = gap;
+        }
 
         @Override
         protected void onMeasure(int w, int h) {
@@ -548,8 +1307,12 @@ public class MainActivity extends AppCompatActivity {
                 v.measure(MeasureSpec.makeMeasureSpec(maxW, MeasureSpec.AT_MOST),
                         MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED));
                 int cw = v.getMeasuredWidth(), ch = v.getMeasuredHeight();
-                if (x + cw > maxW && x > 0) { x = 0; y += rowH; rowH = 0; }
-                x += cw;
+                if (x + cw > maxW && x > 0) {
+                    x = 0;
+                    y += rowH + gap;
+                    rowH = 0;
+                }
+                x += cw + gap;
                 rowH = Math.max(rowH, ch);
             }
             setMeasuredDimension(maxW, y + rowH);
@@ -563,9 +1326,13 @@ public class MainActivity extends AppCompatActivity {
                 View v = getChildAt(i);
                 if (v.getVisibility() == GONE) continue;
                 int cw = v.getMeasuredWidth(), ch = v.getMeasuredHeight();
-                if (x + cw > maxW && x > 0) { x = 0; y += rowH; rowH = 0; }
+                if (x + cw > maxW && x > 0) {
+                    x = 0;
+                    y += rowH + gap;
+                    rowH = 0;
+                }
                 v.layout(x, y, x + cw, y + ch);
-                x += cw;
+                x += cw + gap;
                 rowH = Math.max(rowH, ch);
             }
         }
